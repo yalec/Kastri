@@ -21,7 +21,7 @@ uses
   // macOS
   Macapi.ObjectiveC, Macapi.Helpers,
   // iOS
-  iOSapi.UIKit, iOSapi.Foundation, iOSapi.CoreGraphics, iOSapi.Helpers,
+  iOSapi.UIKit, iOSapi.Foundation, iOSapi.CoreGraphics, iOSapi.Helpers, iOSapi.CocoaTypes,
   // FMX
   FMX.Presentation.Messages, FMX.Presentation.iOS, FMX.Presentation.Factory, FMX.Controls, FMX.Controls.Presentation, FMX.Controls.Model, FMX.Types,
   // DW
@@ -60,6 +60,7 @@ type
     function AdControl: TOpenAdMobBannerAd;
     procedure AdUnitIdChanged;
     procedure AdSizeChanged;
+    function GetAdRequest: GADRequest;
     function GetAdSize: GADAdSize;
     function GetModel: TCustomAdMobBannerAdModel;
   protected
@@ -211,7 +212,26 @@ begin
   Result := TCustomAdMobBannerAdModel;
 end;
 
+function TiOSAdMobBannerAd.GetAdRequest: GADRequest;
+var
+  LExtras: GADExtras;
+  LParameters: NSMutableDictionary;
+begin
+  Result := TGADRequest.Create;
+  if Model.CanRequestCollapsible then
+  begin
+    LParameters := TNSMutableDictionary.Create;
+    LParameters.setObject(StringToID(Model.CollapsiblePlacementParameter), StringToID('collapsible'));
+    LExtras := TGADExtras.Create;
+    LExtras.setAdditionalParameters(LParameters);
+    Result.registerAdNetworkExtras(NSObjectToID(LExtras));
+    Model.CollapsibleRequested;
+  end;
+end;
+
 function TiOSAdMobBannerAd.GetAdSize: GADAdSize;
+var
+  LScreenWidth, LAdWidth: CGFloat;
 begin
   case Model.AdSize of
     TAdMobBannerAdSize.Banner:
@@ -225,7 +245,13 @@ begin
     TAdMobBannerAdSize.MediumRectangle:
       Result := kGADAdSizeMediumRectangle;
     TAdMobBannerAdSize.Adaptive:
-      Result := GADCurrentOrientationAnchoredAdaptiveBannerAdSizeWithWidth(ParentView.frame.Size.Width);
+    begin
+      LScreenWidth := TUIScreen.OCClass.mainScreen.bounds.size.width;
+      LAdWidth := ParentView.frame.Size.Width;
+      if (LAdWidth <= 0) or (LAdWidth > LScreenWidth) then
+        LAdWidth := LScreenWidth;
+      Result := GADCurrentOrientationAnchoredAdaptiveBannerAdSizeWithWidth(LAdWidth);
+    end
   else
     Result := kGADAdSizeBanner;
   end;
@@ -274,7 +300,7 @@ end;
 
 procedure TiOSAdMobBannerAd.MMLoadAd(var AMessage: TDispatchMessage);
 begin
-  FBannerView.loadRequest(TGADRequest.Create);
+  FBannerView.loadRequest(GetAdRequest);
 end;
 
 procedure TiOSAdMobBannerAd.MMTestModeChanged(var AMessage: TDispatchMessage);

@@ -20,7 +20,7 @@ uses
   System.Types, System.SysUtils,
   // Android
   Androidapi.JNIBridge, Androidapi.JNI.AdMob, Androidapi.JNI.GraphicsContentViewText, Androidapi.JNI.Widget, Androidapi.Helpers,
-  Androidapi.JNI.JavaTypes, Androidapi.JNI.Util, Androidapi.JNI.App,
+  Androidapi.JNI.JavaTypes, Androidapi.JNI.Util, Androidapi.JNI.App, Androidapi.JNI.Os,
   // FMX
   FMX.Presentation.Android, FMX.Controls.Model, FMX.Controls.Presentation, FMX.Presentation.Messages, FMX.Presentation.Factory,
   FMX.Controls, FMX.Types,
@@ -90,6 +90,7 @@ type
     procedure CreateAdView;
     procedure DestroyAdView;
     function GetAdaptiveAdSize: JAdSize;
+    function GetAdRequest: JAdRequest;
     function GetAdSize: JAdSize;
     function GetModel: TCustomAdMobBannerAdModel;
   protected
@@ -165,6 +166,22 @@ destructor TAndroidAdMobBannerAd.Destroy;
 begin
   FListenerDelegate.Free;
   inherited;
+end;
+
+function TAndroidAdMobBannerAd.GetAdRequest: JAdRequest;
+var
+  LBuilder: JAdRequest_Builder;
+  LExtras: JBundle;
+begin
+  LBuilder := TJAdRequest_Builder.JavaClass.init;
+  if Model.CanRequestCollapsible then
+  begin
+    LExtras := TJBundle.Create;
+    LExtras.putString(StringToJString('collapsible'), StringToJString(Model.CollapsiblePlacementParameter));
+    LBuilder.addNetworkExtrasBundle(TJAdMobAdapter.JavaClass.init.getClass, LExtras);
+    Model.CollapsibleRequested;
+  end;
+  Result := LBuilder.build;
 end;
 
 procedure TAndroidAdMobBannerAd.CreateAdView;
@@ -261,7 +278,7 @@ begin
     DestroyAdView;
   if FAdView = nil then
     CreateAdView;
-  FAdView.loadAd(TJAdRequest_Builder.JavaClass.init.build);
+  FAdView.loadAd(GetAdRequest);
 end;
 
 procedure TAndroidAdMobBannerAd.MMTestModeChanged(var AMessage: TDispatchMessage);

@@ -30,10 +30,14 @@ const
 type
   TAdMobBannerAdSize = (Banner, LargeBanner, MediumRectangle, FullBanner, Leaderboard, Adaptive);
 
+  TCollapsiblePlacement = (None, Top, Bottom);
+
   TCustomAdMobBannerAdModel = class(TDataModel)
   private
     FAdSize: TAdMobBannerAdSize;
     FAdUnitID: string;
+    FCollapsiblePlacement: TCollapsiblePlacement;
+    FCollapsibleRequestTime: TDateTime;
     FTestMode: Boolean;
     procedure SetAdSize(const Value: TAdMobBannerAdSize);
     procedure SetAdUnitID(const Value: string);
@@ -42,6 +46,10 @@ type
     procedure LoadAd;
     property AdSize: TAdMobBannerAdSize read FAdSize write SetAdSize;
     property AdUnitID: string read FAdUnitID write SetAdUnitID;
+    function CanRequestCollapsible: Boolean;
+    procedure CollapsibleRequested;
+    function CollapsiblePlacementParameter: string;
+    property CollapsiblePlacement: TCollapsiblePlacement read FCollapsiblePlacement write FCollapsiblePlacement;
     property TestMode: Boolean read FTestMode write SetTestMode;
   end;
 
@@ -60,6 +68,8 @@ type
     procedure SetAdSize(const Value: TAdMobBannerAdSize);
     procedure SetAdUnitID(const Value: string);
     procedure SetTestMode(const Value: Boolean);
+    function GetCollapsiblePlacement: TCollapsiblePlacement;
+    procedure SetCollapsiblePlacement(const Value: TCollapsiblePlacement);
   protected
     function DefineModelClass: TDataModelClass; override;
     procedure DoAdClicked;
@@ -75,6 +85,7 @@ type
     procedure LoadAd;
     property AdSize: TAdMobBannerAdSize read GetAdSize write SetAdSize;
     property AdUnitID: string read GetAdUnitID write SetAdUnitID;
+    property CollapsiblePlacement: TCollapsiblePlacement read GetCollapsiblePlacement write SetCollapsiblePlacement;
     property Model: TCustomAdMobBannerAdModel read GetModel;
     property TestMode: Boolean read GetTestMode write SetTestMode default False;
     property OnAdClicked: TNotifyEvent read FOnAdClicked write FOnAdClicked;
@@ -96,6 +107,7 @@ type
     property AdUnitID;
     property Align;
     property Anchors;
+    property CollapsiblePlacement;
     property Height;
     property Margins;
     property Position;
@@ -124,9 +136,12 @@ uses
   DW.AdMobBannerAd.Android,
   {$ENDIF}
   // RTL
-  System.SysUtils, System.IOUtils,
+  System.SysUtils, System.IOUtils, System.DateUtils,
   // FMX
   FMX.Consts;
+
+const
+  cCollapsibleRequestInterval = 180;
 
 procedure Register;
 begin
@@ -134,6 +149,23 @@ begin
 end;
 
 { TCustomAdMobBannerAdModel }
+
+function TCustomAdMobBannerAdModel.CanRequestCollapsible: Boolean;
+begin
+  Result := (FCollapsiblePlacement <> TCollapsiblePlacement.None) and (SecondsBetween(FCollapsibleRequestTime, Now) > cCollapsibleRequestInterval);
+end;
+
+function TCustomAdMobBannerAdModel.CollapsiblePlacementParameter: string;
+const
+  cCollapsiblePlacementValues: array[TCollapsiblePlacement] of string = ('', 'top', 'bottom');
+begin
+  Result := cCollapsiblePlacementValues[FCollapsiblePlacement];
+end;
+
+procedure TCustomAdMobBannerAdModel.CollapsibleRequested;
+begin
+  FCollapsibleRequestTime := Now;
+end;
 
 procedure TCustomAdMobBannerAdModel.LoadAd;
 begin
@@ -191,6 +223,11 @@ begin
   Result := Model.AdUnitID;
 end;
 
+function TCustomAdMobBannerAd.GetCollapsiblePlacement: TCollapsiblePlacement;
+begin
+  Result := Model.CollapsiblePlacement;
+end;
+
 function TCustomAdMobBannerAd.GetModel: TCustomAdMobBannerAdModel;
 begin
   Result := inherited GetModel<TCustomAdMobBannerAdModel>;
@@ -225,6 +262,11 @@ end;
 procedure TCustomAdMobBannerAd.SetAdUnitID(const Value: string);
 begin
   Model.AdUnitID := Value;
+end;
+
+procedure TCustomAdMobBannerAd.SetCollapsiblePlacement(const Value: TCollapsiblePlacement);
+begin
+  Model.CollapsiblePlacement := Value;
 end;
 
 procedure TCustomAdMobBannerAd.SetTestMode(const Value: Boolean);
