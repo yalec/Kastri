@@ -2537,17 +2537,17 @@ type
   [JavaSignature('com/google/android/gms/ads/AbstractAdRequestBuilder')]
   JAbstractAdRequestBuilder = interface(JObject)
     ['{0B807677-D299-486F-9FD9-CD9E50BC899E}']
-    function addCustomEventExtrasBundle(class_1: Jlang_Class; bundle: JBundle): JObject; cdecl;
-    function addCustomTargeting(string_1: JString; string_2: JString): JObject; overload; cdecl;
-    function addCustomTargeting(string_1: JString; list: JList): JObject; overload; cdecl;
-    function addKeyword(string_1: JString): JObject; cdecl;
-    function addNetworkExtrasBundle(class_1: Jlang_Class; bundle: JBundle): JObject; cdecl;
-    function setAdString(string_1: JString): JObject; cdecl;
-    function setContentUrl(string_1: JString): JObject; cdecl;
-    function setHttpTimeoutMillis(int: Integer): JObject; cdecl;
-    function setNeighboringContentUrls(list: JList): JObject; cdecl;
-    function setPlacementId(long: Int64): JObject; cdecl;
-    function setRequestAgent(string_1: JString): JObject; cdecl;
+    function addCustomEventExtrasBundle(class_1: Jlang_Class; bundle: JBundle): JAbstractAdRequestBuilder; cdecl;
+    function addCustomTargeting(string_1: JString; string_2: JString): JAbstractAdRequestBuilder; overload; cdecl;
+    function addCustomTargeting(string_1: JString; list: JList): JAbstractAdRequestBuilder; overload; cdecl;
+    function addKeyword(string_1: JString): JAbstractAdRequestBuilder; cdecl;
+    function addNetworkExtrasBundle(class_1: Jlang_Class; bundle: JBundle): JAbstractAdRequestBuilder; cdecl;
+    function setAdString(string_1: JString): JAbstractAdRequestBuilder; cdecl;
+    function setContentUrl(string_1: JString): JAbstractAdRequestBuilder; cdecl;
+    function setHttpTimeoutMillis(int: Integer): JAbstractAdRequestBuilder; cdecl;
+    function setNeighboringContentUrls(list: JList): JAbstractAdRequestBuilder; cdecl;
+    function setPlacementId(long: Int64): JAbstractAdRequestBuilder; cdecl;
+    function setRequestAgent(string_1: JString): JAbstractAdRequestBuilder; cdecl;
   end;
   TJAbstractAdRequestBuilder = class(TJavaGenericImport<JAbstractAdRequestBuilderClass, JAbstractAdRequestBuilder>) end;
 
