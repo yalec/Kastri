@@ -1332,8 +1332,6 @@ procedure TPlatformCamera.ReadZoomAndWhiteBalance(
 var
   LObject: JObject;
   LRect: JRect;
-  LModes: TJavaArray<Integer>;
-  I: Integer;
 begin
   FMaxZoom := 1;
   FActiveWidth := 0;
@@ -1369,17 +1367,29 @@ begin
     if FMaxZoom < 1 then
       FMaxZoom := 1;
 
-    LObject := ACharacteristics.get(
-      TJCameraCharacteristics.JavaClass.CONTROL_AWB_AVAILABLE_MODES);
-    if LObject <> nil then
-    begin
-      LModes := TJavaArray<Integer>.Wrap((LObject as ILocalObject).GetObjectID);
-      // NOT freed: the array is only a view onto a Java object this code does
-      // not own. Freeing it would release a reference belonging to the JNI
-      // local frame.
-      for I := 0 to LModes.Length - 1 do
-        FAvailableAWBModes := FAvailableAWBModes + [LModes.Items[I]];
-    end;
+    // ⚠️ CONTROL_AWB_AVAILABLE_MODES is deliberately NOT read here, and the
+    // reason is worth writing down.
+    //
+    // characteristics.get() returns Object. Turning that into an int[] means
+    // wrapping a raw JNI handle, and the JNI bridge offers no supported way to
+    // do it:
+    //
+    //   class function TJavaArray<T>.Wrap(const AnArray: TJavaBasicArray)
+    //
+    // Wrap takes a Delphi OBJECT, not a handle. Delphi silently accepts a
+    // Pointer where a class reference is expected, so passing the handle
+    // compiles - and Wrap then reads its Handle field at an offset inside a
+    // native Java structure. The garbage it finds surfaces later as an access
+    // violation in TJavaBasicArray.ToPointer, far from the cause.
+    //
+    // Every array Kastri reads safely comes from a helper method the binding
+    // declares WITH its array type (getControlAEAvailableModes and friends);
+    // the bridge builds the wrapper itself. Doing the same for white balance
+    // would mean adding a method to the Java helper, hence rebuilding its jar.
+    //
+    // Until then the list stays empty, and an empty list already means "this
+    // sensor offers no white balance choice" to the application. Better no
+    // setting at all than one we cannot prove takes effect.
   except
     on E: Exception do
     begin
