@@ -74,6 +74,8 @@ type
     procedure StopThread;
     procedure UpdatePreview;
     procedure UpdatePreviewRequest;
+    // TimeLapse: settings the Java helper cannot carry - see the implementation.
+    procedure ApplyZoomAndWhiteBalance(const ABuilder: JCaptureRequest_Builder);
   protected
     procedure CameraSettingChanged;
     procedure CaptureStillImage;
@@ -111,6 +113,11 @@ type
     // TimeLapse: sizes valid for a JPEG still. FAvailableViewSizes can hold RAW
     // sizes, which the JPEG reader would not accept.
     FAvailableStillSizes: TJavaObjectArray<Jutil_Size>;
+    // TimeLapse: sensor frame and zoom bound, needed to turn a zoom factor into
+    // a crop region.
+    FActiveArray: JRect;
+    FMaxZoom: Single;
+    FAvailableAWBModes: TArray<Integer>;
     FCameraDevice: JCameraDevice;
     FCameraManager: JCameraManager;
     FCameraOrientation: Integer;
@@ -134,6 +141,7 @@ type
     procedure UpdateViewSize;
     // TimeLapse: sizes and sensor bounds, read without opening the camera.
     procedure QueryCharacteristics;
+    procedure ReadZoomAndWhiteBalance(const ACharacteristics: JCameraCharacteristics);
   protected
     // TimeLapse: protected, like the base declaration - a narrower override
     // would be a warning and a trap for anyone deriving from this class.
@@ -142,6 +150,11 @@ type
     function GetMaxExposureTime: Int64; override;
     function GetMinISO: Integer; override;
     function GetMaxISO: Integer; override;
+    function GetMaxZoom: Single; override;
+    function GetAvailableWhiteBalanceModes: TArray<Integer>; override;
+    // TimeLapse: the sensor rectangle to read for the requested zoom, or nil
+    // when there is nothing to crop.
+    function CropRegion: JRect;
     procedure CameraDisconnected(camera: JCameraDevice);
     procedure CameraError(camera: JCameraDevice; error: Integer);
     procedure CameraOpened(camera: JCameraDevice);
@@ -781,6 +794,29 @@ begin
     UpdatePreviewRequest;
 end;
 
+// TimeLapse: zoom and white balance are set on the builder itself. The Java
+// helper only knows how to set integers and longs, and a crop region is a Rect.
+procedure TCameraCaptureSession.ApplyZoomAndWhiteBalance(
+  const ABuilder: JCaptureRequest_Builder);
+var
+  LCrop: JRect;
+begin
+  if ABuilder = nil then
+    Exit;
+  if FPlatformCamera.Camera.RequestedWhiteBalanceMode > 0 then
+  begin
+    // Manual white balance needs auto mode off, exactly like manual exposure.
+    ABuilder.&set(TJCaptureRequest.JavaClass.CONTROL_AWB_LOCK,
+      TJBoolean.JavaClass.valueOf(True));
+    ABuilder.&set(TJCaptureRequest.JavaClass.CONTROL_AWB_MODE,
+      TJInteger.JavaClass.valueOf(
+        FPlatformCamera.Camera.RequestedWhiteBalanceMode));
+  end;
+  LCrop := FPlatformCamera.CropRegion;
+  if LCrop <> nil then
+    ABuilder.&set(TJCaptureRequest.JavaClass.SCALER_CROP_REGION, LCrop);
+end;
+
 procedure TCameraCaptureSession.UpdatePreviewRequest;
 begin
   if FPlatformCamera.ISO > -1 then
@@ -792,6 +828,7 @@ begin
   else
     FRequestHelper.setIntegerValue(TJCaptureRequest.JavaClass.CONTROL_AE_MODE, TJCameraMetadata.JavaClass.CONTROL_AE_MODE_ON);
   FRequestHelper.setFaceDetectMode(Ord(FPlatformCamera.GetHighestFaceDetectMode));
+  ApplyZoomAndWhiteBalance(FPreviewRequestBuilder);
   FSession.setRepeatingRequest(FPreviewRequestBuilder.build, FCaptureSessionCaptureCallback, FHandler);
   FIsCapturing := True;
   FPlatformCamera.CaptureStateChanged;
@@ -1228,9 +1265,89 @@ begin
       FSensorExposureTimeRange.Upper := LHelper.getSensorExposureTimeUpper;
       FSensorSensitivityRange.Lower := LHelper.getSensorSensitivityLower;
       FSensorSensitivityRange.Upper := LHelper.getSensorSensitivityUpper;
+      ReadZoomAndWhiteBalance(LCharacteristics);
       Break;
     end;
   end;
+end;
+
+// TimeLapse: read straight from the characteristics - the Java helper does not
+// expose these. A value we cannot read stays at its neutral default rather than
+// being guessed, so the application can tell "no zoom available" from "unknown".
+procedure TPlatformCamera.ReadZoomAndWhiteBalance(
+  const ACharacteristics: JCameraCharacteristics);
+var
+  LObject: JObject;
+  LModes: TJavaArray<Integer>;
+  I: Integer;
+begin
+  FMaxZoom := 1;
+  FActiveArray := nil;
+  FAvailableAWBModes := nil;
+  if ACharacteristics = nil then
+    Exit;
+
+  LObject := ACharacteristics.get(
+    TJCameraCharacteristics.JavaClass.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+  if LObject <> nil then
+    FActiveArray := TJRect.Wrap(LObject);
+
+  LObject := ACharacteristics.get(
+    TJCameraCharacteristics.JavaClass.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM);
+  if LObject <> nil then
+    FMaxZoom := TJFloat.Wrap(LObject).floatValue;
+  if FMaxZoom < 1 then
+    FMaxZoom := 1;
+
+  LObject := ACharacteristics.get(
+    TJCameraCharacteristics.JavaClass.CONTROL_AWB_AVAILABLE_MODES);
+  if LObject <> nil then
+  begin
+    LModes := TJavaArray<Integer>.Wrap((LObject as ILocalObject).GetObjectID);
+    try
+      for I := 0 to LModes.Length - 1 do
+        FAvailableAWBModes := FAvailableAWBModes + [LModes.Items[I]];
+    finally
+      LModes.Free;
+    end;
+  end;
+end;
+
+function TPlatformCamera.GetMaxZoom: Single;
+begin
+  if FActiveArray = nil then
+    QueryCharacteristics;
+  Result := FMaxZoom;
+end;
+
+function TPlatformCamera.GetAvailableWhiteBalanceModes: TArray<Integer>;
+begin
+  if FActiveArray = nil then
+    QueryCharacteristics;
+  Result := FAvailableAWBModes;
+end;
+
+// Zooming by cropping the sensor is what camera2 offers on every version, and it
+// applies to the preview and the still alike - so the framing on screen is the
+// framing that gets recorded.
+function TPlatformCamera.CropRegion: JRect;
+var
+  LZoom: Single;
+  LWidth, LHeight, LLeft, LTop: Integer;
+begin
+  Result := nil;
+  if FActiveArray = nil then
+    Exit;
+  LZoom := Camera.RequestedZoom;
+  if LZoom <= 1 then
+    Exit;
+  if LZoom > FMaxZoom then
+    LZoom := FMaxZoom;
+  LWidth := Round(FActiveArray.width / LZoom);
+  LHeight := Round(FActiveArray.height / LZoom);
+  LLeft := (FActiveArray.width - LWidth) div 2;
+  LTop := (FActiveArray.height - LHeight) div 2;
+  Result := TJRect.JavaClass.init(LLeft, LTop, LLeft + LWidth, LTop + LHeight);
 end;
 
 function TPlatformCamera.GetAvailableSizes: TArray<TSize>;

@@ -97,6 +97,13 @@ type
     function GetMaxExposureTime: Int64; virtual;
     function GetMinISO: Integer; virtual;
     function GetMaxISO: Integer; virtual;
+    // TimeLapse: the largest digital zoom the sensor accepts. 1 means no zoom is
+    // available, which is different from "not asked yet".
+    function GetMaxZoom: Single; virtual;
+    // TimeLapse: white balance modes this sensor really offers. Empty when the
+    // question could not be answered - offer nothing rather than a mode that
+    // will be ignored without a word.
+    function GetAvailableWhiteBalanceModes: TArray<Integer>; virtual;
     function GetCameraOrientation: Integer; virtual; //!!!!
     function GetFlashMode: TFlashMode;
     // TimeLapse: size the application asked for, (0,0) when it asked for nothing.
@@ -142,6 +149,8 @@ type
     FRequestedSize: TSize;
     FRequestedExposureTime: Int64;
     FRequestedISO: Integer;
+    FRequestedZoom: Single;
+    FRequestedWhiteBalanceMode: Integer;
     FOnAuthorizationStatus: TAuthorizationStatusEvent;
     FOnDetectedFaces: TDetectedFacesEvent;
     FOnFrameAvailable: TFrameAvailableEvent;
@@ -168,6 +177,8 @@ type
     function GetIncludeLocation: Boolean;
     procedure SetIncludeLocation(const Value: Boolean);
     function GetIsCapturing: Boolean;
+    procedure SetRequestedZoom(const Value: Single);
+    procedure SetRequestedWhiteBalanceMode(const Value: Integer);
   protected
     procedure DoAuthorizationStatus(const AStatus: TAuthorizationStatus);
     procedure DoCapturedImage(const AImageStream: TStream);
@@ -218,6 +229,23 @@ type
     function MaxExposureTime: Int64;
     function MinISO: Integer;
     function MaxISO: Integer;
+    /// <summary>
+    ///   TimeLapse: digital zoom factor. 1 (the default) frames the whole
+    ///   sensor. Applied by cropping the sensor region, so it takes effect on
+    ///   the preview as well as on stills - the point being that what you see is
+    ///   what you get. Clamped to MaxZoom.
+    /// </summary>
+    property RequestedZoom: Single read FRequestedZoom write SetRequestedZoom;
+    /// <summary>
+    ///   TimeLapse: white balance, one of CameraMetadata.CONTROL_AWB_MODE_*.
+    ///   Zero, the default, leaves the camera's own automatic mode.
+    /// </summary>
+    property RequestedWhiteBalanceMode: Integer read FRequestedWhiteBalanceMode
+      write SetRequestedWhiteBalanceMode;
+    /// <summary>TimeLapse: largest zoom the sensor accepts; 1 means none.</summary>
+    function MaxZoom: Single;
+    /// <summary>TimeLapse: white balance modes the sensor really offers.</summary>
+    function AvailableWhiteBalanceModes: TArray<Integer>;
     /// <summary>
     ///   Determines whether the camera supports control of exposure
     /// </summary>
@@ -318,6 +346,8 @@ type
 implementation
 
 uses
+  // RTL
+  System.Math,
   // FMX
   FMX.Platform,
   // DW
@@ -431,6 +461,16 @@ end;
 function TCustomPlatformCamera.GetMaxISO: Integer;
 begin
   Result := 0;
+end;
+
+function TCustomPlatformCamera.GetMaxZoom: Single;
+begin
+  Result := 1;
+end;
+
+function TCustomPlatformCamera.GetAvailableWhiteBalanceModes: TArray<Integer>;
+begin
+  Result := nil;
 end;
 
 function TCustomPlatformCamera.RequestedViewSize: TSize;
@@ -827,6 +867,34 @@ end;
 function TCamera.MaxExposureTime: Int64;
 begin
   Result := FPlatformCamera.GetMaxExposureTime;
+end;
+
+function TCamera.MaxZoom: Single;
+begin
+  Result := FPlatformCamera.GetMaxZoom;
+end;
+
+function TCamera.AvailableWhiteBalanceModes: TArray<Integer>;
+begin
+  Result := FPlatformCamera.GetAvailableWhiteBalanceModes;
+end;
+
+// TimeLapse: both settings are re-read on every request, so telling the platform
+// that something changed is enough - no need to reopen anything.
+procedure TCamera.SetRequestedZoom(const Value: Single);
+begin
+  if SameValue(FRequestedZoom, Value) then
+    Exit;
+  FRequestedZoom := Value;
+  FPlatformCamera.CameraSettingChanged;
+end;
+
+procedure TCamera.SetRequestedWhiteBalanceMode(const Value: Integer);
+begin
+  if FRequestedWhiteBalanceMode = Value then
+    Exit;
+  FRequestedWhiteBalanceMode := Value;
+  FPlatformCamera.CameraSettingChanged;
 end;
 
 function TCamera.MinISO: Integer;
