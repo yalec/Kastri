@@ -992,7 +992,11 @@ begin
   if (LCameraID = nil) or (LMap = nil) then
   begin
     TOSLog.d('> No cameras available?');
-    Exit; // <======
+    // TimeLapse: silent Exit. openCamera is never called, so neither CameraOpened
+    // nor CameraError ever fires and the application waits forever.
+    SetLastError(Format('No camera matches the requested position (%d found)',
+      [LCameraIDList.Length]));
+    Exit;
   end;
   TOSLog.d('> Obtained ID and map');
   LCharacteristics := FCameraManager.getCameraCharacteristics(LCameraID);
@@ -1027,10 +1031,16 @@ begin
   begin
     UpdateViewSize;
     TOSLog.d('> openCamera');
+    // TimeLapse: cleared so a previous failure does not outlive a retry.
+    SetLastError('');
     FCameraManager.openCamera(LCameraID, FDeviceStateCallback, FHandler);
   end
   else
+  begin
     TOSLog.d('> No view sizes available');
+    // TimeLapse: the other silent Exit - same consequence as above.
+    SetLastError('No output sizes available for this camera');
+  end;
   TOSLog.d('-TPlatformCamera.DoOpenCamera');
 end;
 
