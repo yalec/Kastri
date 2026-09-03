@@ -490,7 +490,14 @@ procedure TCameraCaptureSession.SurfaceTextureAvailable(texture: JSurfaceTexture
 begin
   FPreviewSurface := nil;
   FSurfaceTexture := texture;
-  FSurfaceTexture.setDefaultBufferSize(PlatformCamera.ViewSize.getWidth, PlatformCamera.ViewSize.getHeight);
+  // TimeLapse: ViewSize may be nil here. The native view and this listener are
+  // created in the constructor (see FCameraView, above), so the render thread can
+  // deliver the surface before the camera has been opened - ViewSize is only set
+  // in DoOpenCamera. Dereferencing it crashed the app with an access violation at
+  // address zero, inside Kastri, while the caller had done nothing wrong.
+  // The buffer size is applied later by UpdatePreview once the camera is open.
+  if PlatformCamera.ViewSize <> nil then
+    FSurfaceTexture.setDefaultBufferSize(PlatformCamera.ViewSize.getWidth, PlatformCamera.ViewSize.getHeight);
   FPreviewSurface := TJSurface.JavaClass.init(FSurfaceTexture);
 //  UpdatePreview;
   TThread.Synchronize(nil, UpdatePreview); // SurfaceTextureAvailable is coming from the view's render thread
@@ -524,6 +531,12 @@ var
   LViewSize: TSize;
   LIsPortrait: Boolean;
 begin
+  // TimeLapse: nothing to lay out until the camera is open AND the preview has a
+  // parent. This is reached from SurfaceTextureAvailable, which the render thread
+  // can fire before either is true - and an app that does not show the preview at
+  // all never gives it a parent. Both cases dereferenced nil.
+  if (PlatformCamera.ViewSize = nil) or (FPreview.ParentControl = nil) then
+    Exit;
   LIsPortrait := Screen.Height > Screen.Width;
   if LIsPortrait then
     LViewSize := TSize.Create(PlatformCamera.ViewSize.getWidth, PlatformCamera.ViewSize.getHeight)
