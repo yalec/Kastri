@@ -1122,6 +1122,11 @@ end;
 procedure TPlatformCamera.CameraError(camera: JCameraDevice; error: Integer);
 begin
   TOSLog.d('TPlatformCamera.CameraError - Error: %d', [error]);
+  // TimeLapse: the log alone is not enough. Opening is asynchronous, so an
+  // application that never sees the camera become active cannot tell a slow start
+  // from a failure. Codes are CameraDevice.StateCallback: 1 already in use,
+  // 2 too many open, 3 disabled by policy, 4 device error, 5 service error.
+  SetLastError(Format('Camera error %d', [error]));
 end;
 
 procedure TPlatformCamera.CameraOpened(camera: JCameraDevice);

@@ -72,6 +72,7 @@ type
     FAvailableFaceDetectModes: TFaceDetectModes;
     FAvailableControlAEModes: TArray<Integer>;
     FIsActive: Boolean;
+    FLastError: string;
     FIsCapturing: Boolean;
     FIsFaceDetectActive: Boolean;
     FIsSwapping: Boolean;
@@ -93,6 +94,9 @@ type
     function GetResolutionWidth: Integer; virtual;
     function HasControlAEMode(const AMode: Integer): Boolean;
     procedure InternalSetActive(const AValue: Boolean);
+    // TimeLapse: the camera can fail to open, and the failure was only written to
+    // the log. An app then shows a frozen counter with nothing to explain it.
+    procedure SetLastError(const AError: string);
     procedure InternalSetExposure(const AValue: Single);
     procedure OpenCamera; virtual;
     procedure QueueAuthorizationStatus(const AStatus: TAuthorizationStatus);
@@ -102,6 +106,8 @@ type
     procedure StartCapture; virtual;
     procedure StopCapture; virtual;
     property IsActive: Boolean read GetIsActive write SetIsActive;
+    // TimeLapse: reason the camera refused to open, empty when all is well.
+    property LastError: string read FLastError;
     property Camera: TCamera read FCamera;
     property CameraPosition: TDevicePosition read GetCameraPosition write SetCameraPosition;
     property ContinuousCapture: Boolean read FContinuousCapture write SetContinuousCapture;
@@ -127,6 +133,7 @@ type
     FOnImageCaptured: TImageAvailableEvent;
     FOnStatusChange: TNotifyEvent;
     function GetIsActive: Boolean;
+    function GetLastError: string;
     function GetAvailableFaceDetectModes: TFaceDetectModes;
     function GetCameraPosition: TDevicePosition;
     function GetContinuousCapture: Boolean;
@@ -201,6 +208,12 @@ type
     ///   Signifies whether or not the camera is active
     /// </summary>
     property IsActive: Boolean read GetIsActive write SetIsActive;
+    /// <summary>
+    ///   TimeLapse: why the camera refused to open; empty when all is well.
+    ///   Opening is asynchronous, so a failure used to reach only the log, and an
+    ///   application had no way of telling a slow start from a dead camera.
+    /// </summary>
+    property LastError: string read GetLastError;
     /// <summary>
     ///   Signifies whether or not the camera is capturing video
     /// </summary>
@@ -312,6 +325,11 @@ destructor TCustomPlatformCamera.Destroy;
 begin
   TMessageManager.DefaultManager.Unsubscribe(TApplicationEventMessage, ApplicationEventMessageHandler);
   inherited;
+end;
+
+procedure TCustomPlatformCamera.SetLastError(const AError: string);
+begin
+  FLastError := AError;
 end;
 
 procedure TCustomPlatformCamera.InternalSetActive(const AValue: Boolean);
@@ -717,6 +735,11 @@ end;
 function TCamera.CanControlExposure: Boolean;
 begin
   Result := FPlatformCamera.CanControlExposure;
+end;
+
+function TCamera.GetLastError: string;
+begin
+  Result := FPlatformCamera.LastError;
 end;
 
 procedure TCamera.CaptureImage;
