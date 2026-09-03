@@ -132,12 +132,16 @@ type
     function GetIsSwapping: Boolean;
     // function GetSessionExposure: Single;
     procedure UpdateViewSize;
-    // TimeLapse: sizes the sensor offers, read without opening the camera.
-    procedure QueryStillSizes;
+    // TimeLapse: sizes and sensor bounds, read without opening the camera.
+    procedure QueryCharacteristics;
   protected
     // TimeLapse: protected, like the base declaration - a narrower override
     // would be a warning and a trap for anyone deriving from this class.
     function GetAvailableSizes: TArray<TSize>; override;
+    function GetMinExposureTime: Int64; override;
+    function GetMaxExposureTime: Int64; override;
+    function GetMinISO: Integer; override;
+    function GetMaxISO: Integer; override;
     procedure CameraDisconnected(camera: JCameraDevice);
     procedure CameraError(camera: JCameraDevice; error: Integer);
     procedure CameraOpened(camera: JCameraDevice);
@@ -880,8 +884,50 @@ begin
   Result := FCameraOrientation;
 end;
 
+function TPlatformCamera.GetMinExposureTime: Int64;
+begin
+  if FSensorExposureTimeRange.Upper = 0 then
+    QueryCharacteristics;
+  Result := FSensorExposureTimeRange.Lower;
+end;
+
+function TPlatformCamera.GetMaxExposureTime: Int64;
+begin
+  if FSensorExposureTimeRange.Upper = 0 then
+    QueryCharacteristics;
+  Result := FSensorExposureTimeRange.Upper;
+end;
+
+function TPlatformCamera.GetMinISO: Integer;
+begin
+  if FSensorSensitivityRange.Upper = 0 then
+    QueryCharacteristics;
+  Result := FSensorSensitivityRange.Lower;
+end;
+
+function TPlatformCamera.GetMaxISO: Integer;
+begin
+  if FSensorSensitivityRange.Upper = 0 then
+    QueryCharacteristics;
+  Result := FSensorSensitivityRange.Upper;
+end;
+
 function TPlatformCamera.GetExposureTime: Int64;
 begin
+  // TimeLapse: honour an explicitly requested exposure time, clamped to what the
+  // sensor accepts. Without this the exposure was a fixed multiple of the lower
+  // bound, so an application could not ask for a longer one at all.
+  if Camera.RequestedExposureTime > 0 then
+  begin
+    Result := Camera.RequestedExposureTime;
+    if (FSensorExposureTimeRange.Lower > 0) and
+       (Result < FSensorExposureTimeRange.Lower) then
+      Result := FSensorExposureTimeRange.Lower;
+    if (FSensorExposureTimeRange.Upper > 0) and
+       (Result > FSensorExposureTimeRange.Upper) then
+      Result := FSensorExposureTimeRange.Upper;
+    Exit;
+  end;
   // Result := Round((0.2 * (FSensorExposureTimeRange.Upper - FSensorExposureTimeRange.Lower)) + FSensorExposureTimeRange.Lower);
   Result := Round(FSensorExposureTimeRange.Lower * 25.0);
   // TOSLog.d('TPlatformCamera.GetExposureTime > Lower: %d, Upper: %d, Result: %d', [FSensorExposureTimeRange.Lower, FSensorExposureTimeRange.Upper, Result]);
@@ -891,6 +937,19 @@ function TPlatformCamera.GetISO: Integer;
 var
   LFactor: Single;
 begin
+  // TimeLapse: an explicit ISO wins over the value derived from Exposure, and is
+  // clamped to the sensor's range.
+  if Camera.RequestedISO > 0 then
+  begin
+    Result := Camera.RequestedISO;
+    if (FSensorSensitivityRange.Lower > 0) and
+       (Result < FSensorSensitivityRange.Lower) then
+      Result := FSensorSensitivityRange.Lower;
+    if (FSensorSensitivityRange.Upper > 0) and
+       (Result > FSensorSensitivityRange.Upper) then
+      Result := FSensorSensitivityRange.Upper;
+    Exit;
+  end;
   if Exposure > -1 then
   begin
     LFactor := Round(Exposure * 100) / 100;
@@ -1133,7 +1192,7 @@ end;
 // opening path is delicate and hard-won, and this query must not disturb it.
 // Needs neither an open camera nor the CAMERA permission, so a settings screen
 // can offer real resolutions before anything is opened.
-procedure TPlatformCamera.QueryStillSizes;
+procedure TPlatformCamera.QueryCharacteristics;
 var
   LCameraIDList: TJavaObjectArray<JString>;
   LItem: JString;
@@ -1163,6 +1222,12 @@ begin
     begin
       FAvailableStillSizes := LHelper.getMap.getOutputSizes(
         TJImageFormat.JavaClass.JPEG);
+      // Same read as DoOpenCamera performs, but available before opening, so a
+      // settings screen can show the bounds this sensor really accepts.
+      FSensorExposureTimeRange.Lower := LHelper.getSensorExposureTimeLower;
+      FSensorExposureTimeRange.Upper := LHelper.getSensorExposureTimeUpper;
+      FSensorSensitivityRange.Lower := LHelper.getSensorSensitivityLower;
+      FSensorSensitivityRange.Upper := LHelper.getSensorSensitivityUpper;
       Break;
     end;
   end;
@@ -1175,7 +1240,7 @@ var
 begin
   Result := nil;
   if FAvailableStillSizes = nil then
-    QueryStillSizes;
+    QueryCharacteristics;
   if FAvailableStillSizes = nil then
     Exit;
   for I := 0 to FAvailableStillSizes.Length - 1 do

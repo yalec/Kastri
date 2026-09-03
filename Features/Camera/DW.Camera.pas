@@ -90,6 +90,13 @@ type
     // TimeLapse: sizes the sensor offers. Empty until the camera is open, since
     // only the device can say what it supports.
     function GetAvailableSizes: TArray<TSize>; virtual;
+    // TimeLapse: the exposure and sensitivity the sensor actually accepts.
+    // Zero means the platform cannot say, which is not the same as "no limit":
+    // callers must treat it as unknown rather than as an open range.
+    function GetMinExposureTime: Int64; virtual;
+    function GetMaxExposureTime: Int64; virtual;
+    function GetMinISO: Integer; virtual;
+    function GetMaxISO: Integer; virtual;
     function GetCameraOrientation: Integer; virtual; //!!!!
     function GetFlashMode: TFlashMode;
     // TimeLapse: size the application asked for, (0,0) when it asked for nothing.
@@ -133,6 +140,8 @@ type
     FMetadataOptions: TMetadataOptions;
     FPlatformCamera: TCustomPlatformCamera;
     FRequestedSize: TSize;
+    FRequestedExposureTime: Int64;
+    FRequestedISO: Integer;
     FOnAuthorizationStatus: TAuthorizationStatusEvent;
     FOnDetectedFaces: TDetectedFacesEvent;
     FOnFrameAvailable: TFrameAvailableEvent;
@@ -187,6 +196,28 @@ type
     ///   write time and heat.
     /// </summary>
     property RequestedSize: TSize read FRequestedSize write FRequestedSize;
+    /// <summary>
+    ///   TimeLapse: exposure time in NANOSECONDS. Zero, the default, keeps the
+    ///   platform's own choice. A value outside the sensor's range is clamped to
+    ///   it rather than refused - but read MaxExposureTime first and show the
+    ///   real bound, because clamping in silence hides why a night shot came out
+    ///   dark.
+    /// </summary>
+    property RequestedExposureTime: Int64 read FRequestedExposureTime
+      write FRequestedExposureTime;
+    /// <summary>
+    ///   TimeLapse: ISO sensitivity. Zero, the default, keeps the platform's own
+    ///   choice. Clamped to the sensor's range like the exposure time.
+    /// </summary>
+    property RequestedISO: Integer read FRequestedISO write FRequestedISO;
+    /// <summary>
+    ///   TimeLapse: bounds the sensor accepts. Zero means unknown, which is not
+    ///   the same as unbounded.
+    /// </summary>
+    function MinExposureTime: Int64;
+    function MaxExposureTime: Int64;
+    function MinISO: Integer;
+    function MaxISO: Integer;
     /// <summary>
     ///   Determines whether the camera supports control of exposure
     /// </summary>
@@ -380,6 +411,26 @@ end;
 function TCustomPlatformCamera.GetAvailableSizes: TArray<TSize>;
 begin
   Result := nil;
+end;
+
+function TCustomPlatformCamera.GetMinExposureTime: Int64;
+begin
+  Result := 0;
+end;
+
+function TCustomPlatformCamera.GetMaxExposureTime: Int64;
+begin
+  Result := 0;
+end;
+
+function TCustomPlatformCamera.GetMinISO: Integer;
+begin
+  Result := 0;
+end;
+
+function TCustomPlatformCamera.GetMaxISO: Integer;
+begin
+  Result := 0;
 end;
 
 function TCustomPlatformCamera.RequestedViewSize: TSize;
@@ -766,6 +817,26 @@ end;
 function TCamera.AvailableSizes: TArray<TSize>;
 begin
   Result := FPlatformCamera.GetAvailableSizes;
+end;
+
+function TCamera.MinExposureTime: Int64;
+begin
+  Result := FPlatformCamera.GetMinExposureTime;
+end;
+
+function TCamera.MaxExposureTime: Int64;
+begin
+  Result := FPlatformCamera.GetMaxExposureTime;
+end;
+
+function TCamera.MinISO: Integer;
+begin
+  Result := FPlatformCamera.GetMinISO;
+end;
+
+function TCamera.MaxISO: Integer;
+begin
+  Result := FPlatformCamera.GetMaxISO;
 end;
 
 function TCamera.CanControlExposure: Boolean;
