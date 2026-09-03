@@ -113,9 +113,19 @@ type
     // TimeLapse: sizes valid for a JPEG still. FAvailableViewSizes can hold RAW
     // sizes, which the JPEG reader would not accept.
     FAvailableStillSizes: TJavaObjectArray<Jutil_Size>;
+    // ⚠️ The same list as plain Delphi values. FAvailableStillSizes is a JNI
+    // local reference: valid until the native call that produced it returns, and
+    // a dangling handle on the next read. Anything consulted later - a settings
+    // screen reopened, a second query - must come from here.
+    FStillSizes: TArray<TSize>;
     // TimeLapse: sensor frame and zoom bound, needed to turn a zoom factor into
     // a crop region.
-    FActiveArray: JRect;
+    // ⚠️ Kept as plain integers, NOT as the JRect they came from: that Rect is a
+    // JNI local reference, valid only until the native call that produced it
+    // returns. Holding it in a field would leave a dangling handle to be
+    // dereferenced later, from another call, on another thread.
+    FActiveWidth: Integer;
+    FActiveHeight: Integer;
     FMaxZoom: Single;
     FAvailableAWBModes: TArray<Integer>;
     FCameraDevice: JCameraDevice;
@@ -141,6 +151,7 @@ type
     procedure UpdateViewSize;
     // TimeLapse: sizes and sensor bounds, read without opening the camera.
     procedure QueryCharacteristics;
+    procedure CopyStillSizes;
     procedure ReadZoomAndWhiteBalance(const ACharacteristics: JCameraCharacteristics);
   protected
     // TimeLapse: protected, like the base declaration - a narrower override
@@ -1129,6 +1140,7 @@ begin
   end;
   // May need to rethink this - largest preview size may not be appropriate, except for stills
   FAvailableStillSizes := LMap.getOutputSizes(TJImageFormat.JavaClass.JPEG);
+  CopyStillSizes;
   FAvailableViewSizes := LMap.getOutputSizes(TJImageFormat.JavaClass.RAW_SENSOR);
   if FAvailableViewSizes = nil then
     FAvailableViewSizes := FAvailableStillSizes;
@@ -1209,6 +1221,8 @@ begin
         Break;
       end;
     end;
+  // Note: read here within DoOpenCamera, right after the array is obtained, so
+  // the reference is still alive. Anything later must use FStillSizes.
 
   // Find the maximum view size
   for I := 0 to FAvailableViewSizes.Length - 1 do
@@ -1259,6 +1273,7 @@ begin
     begin
       FAvailableStillSizes := LHelper.getMap.getOutputSizes(
         TJImageFormat.JavaClass.JPEG);
+      CopyStillSizes;
       // Same read as DoOpenCamera performs, but available before opening, so a
       // settings screen can show the bounds this sensor really accepts.
       FSensorExposureTimeRange.Lower := LHelper.getSensorExposureTimeLower;
@@ -1278,51 +1293,78 @@ procedure TPlatformCamera.ReadZoomAndWhiteBalance(
   const ACharacteristics: JCameraCharacteristics);
 var
   LObject: JObject;
+  LRect: JRect;
   LModes: TJavaArray<Integer>;
   I: Integer;
 begin
   FMaxZoom := 1;
-  FActiveArray := nil;
+  FActiveWidth := 0;
+  FActiveHeight := 0;
   FAvailableAWBModes := nil;
   if ACharacteristics = nil then
     Exit;
 
-  LObject := ACharacteristics.get(
-    TJCameraCharacteristics.JavaClass.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
-  if LObject <> nil then
-    FActiveArray := TJRect.Wrap(LObject);
+  // ⚠️ Wrap takes a JNI HANDLE, not an interface. Passing the JObject itself
+  // compiles - it is a Pointer-shaped argument - and then dereferences the
+  // interface as if it were a Java object: access violation on the first read.
+  // The handle comes from ILocalObject.GetObjectID.
+  //
+  // Wrapped in try/except because these three reads are optional: a device that
+  // cannot answer must lose zoom and white balance, never the whole settings
+  // screen. Values stay at their neutral defaults, which the application reads
+  // as "not available".
+  try
+    LObject := ACharacteristics.get(
+      TJCameraCharacteristics.JavaClass.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+    if LObject <> nil then
+    begin
+      LRect := TJRect.Wrap((LObject as ILocalObject).GetObjectID);
+      // Read NOW, while the reference is still alive.
+      FActiveWidth := LRect.width;
+      FActiveHeight := LRect.height;
+    end;
 
-  LObject := ACharacteristics.get(
-    TJCameraCharacteristics.JavaClass.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM);
-  if LObject <> nil then
-    FMaxZoom := TJFloat.Wrap(LObject).floatValue;
-  if FMaxZoom < 1 then
-    FMaxZoom := 1;
+    LObject := ACharacteristics.get(
+      TJCameraCharacteristics.JavaClass.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM);
+    if LObject <> nil then
+      FMaxZoom := TJFloat.Wrap((LObject as ILocalObject).GetObjectID).floatValue;
+    if FMaxZoom < 1 then
+      FMaxZoom := 1;
 
-  LObject := ACharacteristics.get(
-    TJCameraCharacteristics.JavaClass.CONTROL_AWB_AVAILABLE_MODES);
-  if LObject <> nil then
-  begin
-    LModes := TJavaArray<Integer>.Wrap((LObject as ILocalObject).GetObjectID);
-    try
+    LObject := ACharacteristics.get(
+      TJCameraCharacteristics.JavaClass.CONTROL_AWB_AVAILABLE_MODES);
+    if LObject <> nil then
+    begin
+      LModes := TJavaArray<Integer>.Wrap((LObject as ILocalObject).GetObjectID);
+      // NOT freed: the array is only a view onto a Java object this code does
+      // not own. Freeing it would release a reference belonging to the JNI
+      // local frame.
       for I := 0 to LModes.Length - 1 do
         FAvailableAWBModes := FAvailableAWBModes + [LModes.Items[I]];
-    finally
-      LModes.Free;
+    end;
+  except
+    on E: Exception do
+    begin
+      TOSLog.w('Could not read zoom / white balance characteristics: %s',
+        [E.Message]);
+      FMaxZoom := 1;
+      FActiveWidth := 0;
+      FActiveHeight := 0;
+      FAvailableAWBModes := nil;
     end;
   end;
 end;
 
 function TPlatformCamera.GetMaxZoom: Single;
 begin
-  if FActiveArray = nil then
+  if FActiveWidth = 0 then
     QueryCharacteristics;
   Result := FMaxZoom;
 end;
 
 function TPlatformCamera.GetAvailableWhiteBalanceModes: TArray<Integer>;
 begin
-  if FActiveArray = nil then
+  if FActiveWidth = 0 then
     QueryCharacteristics;
   Result := FAvailableAWBModes;
 end;
@@ -1336,35 +1378,41 @@ var
   LWidth, LHeight, LLeft, LTop: Integer;
 begin
   Result := nil;
-  if FActiveArray = nil then
+  if (FActiveWidth = 0) or (FActiveHeight = 0) then
     Exit;
   LZoom := Camera.RequestedZoom;
   if LZoom <= 1 then
     Exit;
   if LZoom > FMaxZoom then
     LZoom := FMaxZoom;
-  LWidth := Round(FActiveArray.width / LZoom);
-  LHeight := Round(FActiveArray.height / LZoom);
-  LLeft := (FActiveArray.width - LWidth) div 2;
-  LTop := (FActiveArray.height - LHeight) div 2;
+  LWidth := Round(FActiveWidth / LZoom);
+  LHeight := Round(FActiveHeight / LZoom);
+  LLeft := (FActiveWidth - LWidth) div 2;
+  LTop := (FActiveHeight - LHeight) div 2;
   Result := TJRect.JavaClass.init(LLeft, LTop, LLeft + LWidth, LTop + LHeight);
 end;
 
-function TPlatformCamera.GetAvailableSizes: TArray<TSize>;
+// TimeLapse: converts the Java array into Delphi values while it is still alive.
+procedure TPlatformCamera.CopyStillSizes;
 var
   I: Integer;
   LSize: Jutil_Size;
 begin
-  Result := nil;
-  if FAvailableStillSizes = nil then
-    QueryCharacteristics;
+  FStillSizes := nil;
   if FAvailableStillSizes = nil then
     Exit;
   for I := 0 to FAvailableStillSizes.Length - 1 do
   begin
     LSize := FAvailableStillSizes.Items[I];
-    Result := Result + [TSize.Create(LSize.getWidth, LSize.getHeight)];
+    FStillSizes := FStillSizes + [TSize.Create(LSize.getWidth, LSize.getHeight)];
   end;
+end;
+
+function TPlatformCamera.GetAvailableSizes: TArray<TSize>;
+begin
+  if Length(FStillSizes) = 0 then
+    QueryCharacteristics;
+  Result := FStillSizes;
 end;
 
 function TPlatformCamera.SizeFitsInPreview(const ASize: Jutil_Size): Boolean;
