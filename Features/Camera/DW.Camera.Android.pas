@@ -17,7 +17,7 @@ interface
 
 uses
   // RTL
-  System.Classes,
+  System.Classes, System.Types,
   // Android
   Androidapi.JNIBridge, Androidapi.JNI.Util, Androidapi.Gles, Androidapi.JNI.GraphicsContentViewText, Androidapi.JNI.Os, Androidapi.JNI.Media,
   // FMX
@@ -108,6 +108,9 @@ type
   TPlatformCamera = class(TCustomPlatformCamera)
   private
     FAvailableViewSizes: TJavaObjectArray<Jutil_Size>;
+    // TimeLapse: sizes valid for a JPEG still. FAvailableViewSizes can hold RAW
+    // sizes, which the JPEG reader would not accept.
+    FAvailableStillSizes: TJavaObjectArray<Jutil_Size>;
     FCameraDevice: JCameraDevice;
     FCameraManager: JCameraManager;
     FCameraOrientation: Integer;
@@ -129,7 +132,12 @@ type
     function GetIsSwapping: Boolean;
     // function GetSessionExposure: Single;
     procedure UpdateViewSize;
+    // TimeLapse: sizes the sensor offers, read without opening the camera.
+    procedure QueryStillSizes;
   protected
+    // TimeLapse: protected, like the base declaration - a narrower override
+    // would be a warning and a trap for anyone deriving from this class.
+    function GetAvailableSizes: TArray<TSize>; override;
     procedure CameraDisconnected(camera: JCameraDevice);
     procedure CameraError(camera: JCameraDevice; error: Integer);
     procedure CameraOpened(camera: JCameraDevice);
@@ -169,7 +177,7 @@ implementation
 
 uses
   // RTL
-  System.SysUtils, System.Types, System.DateUtils, System.Math, System.Permissions, System.IOUtils, System.Sensors,
+  System.SysUtils, System.DateUtils, System.Math, System.Permissions, System.IOUtils, System.Sensors,
   // Android
   Androidapi.Helpers, Androidapi.JNI, Androidapi.JNI.App, Androidapi.JNI.JavaTypes,
   // FMX
@@ -1024,9 +1032,10 @@ begin
     LModes.Free;
   end;
   // May need to rethink this - largest preview size may not be appropriate, except for stills
+  FAvailableStillSizes := LMap.getOutputSizes(TJImageFormat.JavaClass.JPEG);
   FAvailableViewSizes := LMap.getOutputSizes(TJImageFormat.JavaClass.RAW_SENSOR);
   if FAvailableViewSizes = nil then
-    FAvailableViewSizes := LMap.getOutputSizes(TJImageFormat.JavaClass.JPEG);
+    FAvailableViewSizes := FAvailableStillSizes;
   if FAvailableViewSizes <> nil then
   begin
     UpdateViewSize;
@@ -1085,11 +1094,31 @@ procedure TPlatformCamera.UpdateViewSize;
 var
   I: Integer;
   LSize: Jutil_Size;
+  LRequested: TSize;
 begin
-  // Find the maximum view size
+  // TimeLapse: honour a requested size when the sensor offers it. The maximum is
+  // not always what an application wants - a time-lapse aimed at a 1080p video
+  // has no use for 12 megapixel stills, which cost storage, write time and heat.
+  // Falls back to the maximum when nothing is requested or the request is not
+  // available, so existing behaviour is unchanged.
+  LRequested := RequestedViewSize;
   FViewSize := nil;
+  if (LRequested.cx > 0) and (LRequested.cy > 0) and (FAvailableStillSizes <> nil) then
+    for I := 0 to FAvailableStillSizes.Length - 1 do
+    begin
+      LSize := FAvailableStillSizes.Items[I];
+      if (LSize.getWidth = LRequested.cx) and (LSize.getHeight = LRequested.cy) then
+      begin
+        FViewSize := LSize;
+        Break;
+      end;
+    end;
+
+  // Find the maximum view size
   for I := 0 to FAvailableViewSizes.Length - 1 do
   begin
+    if FViewSize <> nil then
+      Break;
     LSize := FAvailableViewSizes.Items[I];
     // TOSLog.d('View size: %d x %d', [LSize.getWidth, LSize.getHeight]);
     if ((FViewSize = nil) or (GetSizeArea(LSize) > GetSizeArea(FViewSize))) then
@@ -1097,6 +1126,63 @@ begin
   end;
   if (FViewSize <> nil) and ((FCameraOrientation mod 180) <> 0) then
     FViewSize := TJutil_Size.JavaClass.init(FViewSize.getWidth, FViewSize.getHeight);
+end;
+
+// TimeLapse: reads the still sizes straight from the camera characteristics.
+// Deliberately separate from DoOpenCamera rather than factored out of it: the
+// opening path is delicate and hard-won, and this query must not disturb it.
+// Needs neither an open camera nor the CAMERA permission, so a settings screen
+// can offer real resolutions before anything is opened.
+procedure TPlatformCamera.QueryStillSizes;
+var
+  LCameraIDList: TJavaObjectArray<JString>;
+  LItem: JString;
+  LCharacteristics: JCameraCharacteristics;
+  LHelper: JDWCameraCharacteristicsHelper;
+  LLensFacing: Integer;
+  LWanted: Integer;
+  I: Integer;
+begin
+  if FCameraManager = nil then
+    Exit;
+  if CameraPosition = TDevicePosition.Front then
+    LWanted := TJCameraMetadata.JavaClass.LENS_FACING_FRONT
+  else
+    LWanted := TJCameraMetadata.JavaClass.LENS_FACING_BACK;
+  LCameraIDList := FCameraManager.getCameraIdList;
+  if LCameraIDList = nil then
+    Exit;
+  LHelper := TJDWCameraCharacteristicsHelper.JavaClass.init;
+  for I := 0 to LCameraIDList.Length - 1 do
+  begin
+    LItem := LCameraIDList.Items[I];
+    LCharacteristics := FCameraManager.getCameraCharacteristics(LItem);
+    LHelper.setCameraCharacteristics(LCharacteristics);
+    LLensFacing := LHelper.getLensFacing;
+    if LLensFacing = LWanted then
+    begin
+      FAvailableStillSizes := LHelper.getMap.getOutputSizes(
+        TJImageFormat.JavaClass.JPEG);
+      Break;
+    end;
+  end;
+end;
+
+function TPlatformCamera.GetAvailableSizes: TArray<TSize>;
+var
+  I: Integer;
+  LSize: Jutil_Size;
+begin
+  Result := nil;
+  if FAvailableStillSizes = nil then
+    QueryStillSizes;
+  if FAvailableStillSizes = nil then
+    Exit;
+  for I := 0 to FAvailableStillSizes.Length - 1 do
+  begin
+    LSize := FAvailableStillSizes.Items[I];
+    Result := Result + [TSize.Create(LSize.getWidth, LSize.getHeight)];
+  end;
 end;
 
 function TPlatformCamera.SizeFitsInPreview(const ASize: Jutil_Size): Boolean;

@@ -87,8 +87,13 @@ type
     procedure DoDetectedFaces(const AImageStream: TStream; const AFaces: TFaces);
     procedure DoFrameAvailable(const AFrame: TBitmap);
     procedure DoStatusChange;
+    // TimeLapse: sizes the sensor offers. Empty until the camera is open, since
+    // only the device can say what it supports.
+    function GetAvailableSizes: TArray<TSize>; virtual;
     function GetCameraOrientation: Integer; virtual; //!!!!
     function GetFlashMode: TFlashMode;
+    // TimeLapse: size the application asked for, (0,0) when it asked for nothing.
+    function RequestedViewSize: TSize;
     function GetPreviewControl: TControl; virtual;
     function GetResolutionHeight: Integer; virtual;
     function GetResolutionWidth: Integer; virtual;
@@ -127,6 +132,7 @@ type
     FLocation: TLocationCoord2D;
     FMetadataOptions: TMetadataOptions;
     FPlatformCamera: TCustomPlatformCamera;
+    FRequestedSize: TSize;
     FOnAuthorizationStatus: TAuthorizationStatusEvent;
     FOnDetectedFaces: TDetectedFacesEvent;
     FOnFrameAvailable: TFrameAvailableEvent;
@@ -166,6 +172,21 @@ type
     ///   Captures a still image, returned in OnImageCaptured
     /// </summary>
     procedure CaptureImage;
+    /// <summary>
+    ///   TimeLapse: sizes this camera can capture at. Empty until the camera is
+    ///   open - the list comes from the sensor, not from a guess.
+    /// </summary>
+    function AvailableSizes: TArray<TSize>;
+    /// <summary>
+    ///   TimeLapse: size to capture at. Set it to (0,0), the default, to keep the
+    ///   maximum the sensor offers. A size the sensor does not offer is ignored,
+    ///   and the maximum used instead. Read when the camera opens, so set it
+    ///   BEFORE setting IsActive.
+    ///   The maximum is not always what an application wants: a time-lapse aimed
+    ///   at a 1080p video has no use for 12 megapixel stills, which cost storage,
+    ///   write time and heat.
+    /// </summary>
+    property RequestedSize: TSize read FRequestedSize write FRequestedSize;
     /// <summary>
     ///   Determines whether the camera supports control of exposure
     /// </summary>
@@ -354,6 +375,16 @@ begin
     TApplicationEvent.BecameActive:
       RestoreCamera;
   end;
+end;
+
+function TCustomPlatformCamera.GetAvailableSizes: TArray<TSize>;
+begin
+  Result := nil;
+end;
+
+function TCustomPlatformCamera.RequestedViewSize: TSize;
+begin
+  Result := FCamera.RequestedSize;
 end;
 
 procedure TCustomPlatformCamera.CameraSettingChanged;
@@ -730,6 +761,11 @@ end;
 procedure TCamera.SetFlashMode(const Value: TFlashMode);
 begin
   FPlatformCamera.FlashMode := Value;
+end;
+
+function TCamera.AvailableSizes: TArray<TSize>;
+begin
+  Result := FPlatformCamera.GetAvailableSizes;
 end;
 
 function TCamera.CanControlExposure: Boolean;
