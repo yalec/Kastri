@@ -118,6 +118,10 @@ type
     // a dangling handle on the next read. Anything consulted later - a settings
     // screen reopened, a second query - must come from here.
     FStillSizes: TArray<TSize>;
+    // TimeLapse: the query is attempted ONCE. Without this, a query that fails
+    // would be retried on every read - and a crash inside it would come back at
+    // every screen refresh instead of once.
+    FCharacteristicsQueried: Boolean;
     // TimeLapse: sensor frame and zoom bound, needed to turn a zoom factor into
     // a crop region.
     // ⚠️ Kept as plain integers, NOT as the JRect they came from: that Rect is a
@@ -934,29 +938,25 @@ end;
 
 function TPlatformCamera.GetMinExposureTime: Int64;
 begin
-  if FSensorExposureTimeRange.Upper = 0 then
-    QueryCharacteristics;
+  QueryCharacteristics;
   Result := FSensorExposureTimeRange.Lower;
 end;
 
 function TPlatformCamera.GetMaxExposureTime: Int64;
 begin
-  if FSensorExposureTimeRange.Upper = 0 then
-    QueryCharacteristics;
+  QueryCharacteristics;
   Result := FSensorExposureTimeRange.Upper;
 end;
 
 function TPlatformCamera.GetMinISO: Integer;
 begin
-  if FSensorSensitivityRange.Upper = 0 then
-    QueryCharacteristics;
+  QueryCharacteristics;
   Result := FSensorSensitivityRange.Lower;
 end;
 
 function TPlatformCamera.GetMaxISO: Integer;
 begin
-  if FSensorSensitivityRange.Upper = 0 then
-    QueryCharacteristics;
+  QueryCharacteristics;
   Result := FSensorSensitivityRange.Upper;
 end;
 
@@ -1141,6 +1141,9 @@ begin
   // May need to rethink this - largest preview size may not be appropriate, except for stills
   FAvailableStillSizes := LMap.getOutputSizes(TJImageFormat.JavaClass.JPEG);
   CopyStillSizes;
+  // Opening reads the characteristics for itself: what the early query may have
+  // failed to obtain is available again here.
+  FCharacteristicsQueried := True;
   FAvailableViewSizes := LMap.getOutputSizes(TJImageFormat.JavaClass.RAW_SENSOR);
   if FAvailableViewSizes = nil then
     FAvailableViewSizes := FAvailableStillSizes;
@@ -1253,8 +1256,25 @@ var
   LWanted: Integer;
   I: Integer;
 begin
+  // ⚠️ Attempted once, and never allowed to bring the application down.
+  //
+  // This whole routine is a CONVENIENCE: it lets a settings screen show the
+  // sizes and bounds a sensor really offers before anything is opened. If the
+  // device will not answer - and JNI has several ways not to - the screen must
+  // degrade to "camera not ready", which it already knows how to display. It
+  // must not crash, and it must not keep trying: a fault raised here would
+  // otherwise come back at every refresh.
+  //
+  // DoOpenCamera reads the same characteristics for itself and does not depend
+  // on this routine, so failing here costs nothing but the preview of the
+  // settings.
+  if FCharacteristicsQueried then
+    Exit;
+  FCharacteristicsQueried := True;
   if FCameraManager = nil then
     Exit;
+  try
+    TOSLog.d('QueryCharacteristics: getCameraIdList');
   if CameraPosition = TDevicePosition.Front then
     LWanted := TJCameraMetadata.JavaClass.LENS_FACING_FRONT
   else
@@ -1262,6 +1282,7 @@ begin
   LCameraIDList := FCameraManager.getCameraIdList;
   if LCameraIDList = nil then
     Exit;
+  TOSLog.d('QueryCharacteristics: id list obtained');
   LHelper := TJDWCameraCharacteristicsHelper.JavaClass.init;
   for I := 0 to LCameraIDList.Length - 1 do
   begin
@@ -1271,17 +1292,34 @@ begin
     LLensFacing := LHelper.getLensFacing;
     if LLensFacing = LWanted then
     begin
+      TOSLog.d('QueryCharacteristics: reading output sizes');
       FAvailableStillSizes := LHelper.getMap.getOutputSizes(
         TJImageFormat.JavaClass.JPEG);
       CopyStillSizes;
+      TOSLog.d('QueryCharacteristics: %d still sizes', [Length(FStillSizes)]);
       // Same read as DoOpenCamera performs, but available before opening, so a
       // settings screen can show the bounds this sensor really accepts.
       FSensorExposureTimeRange.Lower := LHelper.getSensorExposureTimeLower;
       FSensorExposureTimeRange.Upper := LHelper.getSensorExposureTimeUpper;
       FSensorSensitivityRange.Lower := LHelper.getSensorSensitivityLower;
       FSensorSensitivityRange.Upper := LHelper.getSensorSensitivityUpper;
+      TOSLog.d('QueryCharacteristics: reading zoom and white balance');
       ReadZoomAndWhiteBalance(LCharacteristics);
+      TOSLog.d('QueryCharacteristics: done');
       Break;
+    end;
+  end;
+  except
+    on E: Exception do
+    begin
+      TOSLog.w('QueryCharacteristics failed, settings will show as unavailable: %s',
+        [E.Message]);
+      FStillSizes := nil;
+      FAvailableStillSizes := nil;
+      FMaxZoom := 1;
+      FActiveWidth := 0;
+      FActiveHeight := 0;
+      FAvailableAWBModes := nil;
     end;
   end;
 end;
@@ -1357,15 +1395,13 @@ end;
 
 function TPlatformCamera.GetMaxZoom: Single;
 begin
-  if FActiveWidth = 0 then
-    QueryCharacteristics;
+  QueryCharacteristics;
   Result := FMaxZoom;
 end;
 
 function TPlatformCamera.GetAvailableWhiteBalanceModes: TArray<Integer>;
 begin
-  if FActiveWidth = 0 then
-    QueryCharacteristics;
+  QueryCharacteristics;
   Result := FAvailableAWBModes;
 end;
 
@@ -1410,8 +1446,7 @@ end;
 
 function TPlatformCamera.GetAvailableSizes: TArray<TSize>;
 begin
-  if Length(FStillSizes) = 0 then
-    QueryCharacteristics;
+  QueryCharacteristics;
   Result := FStillSizes;
 end;
 
