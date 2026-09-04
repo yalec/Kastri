@@ -1427,8 +1427,12 @@ begin
   if (FActiveWidth = 0) or (FActiveHeight = 0) then
     Exit;
   LZoom := Camera.RequestedZoom;
+  // ⚠️ At 1x we return the FULL sensor rectangle, not nil. Returning nil left
+  // the previous crop region in the request builder - camera2 keeps whatever
+  // was set - so going back to 1x did not undo the zoom. The setting has to be
+  // overwritten, never merely omitted.
   if LZoom <= 1 then
-    Exit;
+    Exit(TJRect.JavaClass.init(0, 0, FActiveWidth, FActiveHeight));
   if LZoom > FMaxZoom then
     LZoom := FMaxZoom;
   LWidth := Round(FActiveWidth / LZoom);
