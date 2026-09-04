@@ -100,6 +100,10 @@ type
     // TimeLapse: the largest digital zoom the sensor accepts. 1 means no zoom is
     // available, which is different from "not asked yet".
     function GetMaxZoom: Single; virtual;
+    // TimeLapse: what the camera actually used for the last frame it completed.
+    // Zero means nothing has been measured yet.
+    procedure SetMeasuredExposure(const AExposureTime: Int64;
+      const AISO: Integer; const AWhiteBalanceMode: Integer);
     // TimeLapse: white balance modes this sensor really offers. Empty when the
     // question could not be answered - offer nothing rather than a mode that
     // will be ignored without a word.
@@ -151,6 +155,11 @@ type
     FRequestedISO: Integer;
     FRequestedZoom: Single;
     FRequestedWhiteBalanceMode: Integer;
+    FMeasuredExposureTime: Int64;
+    FMeasuredISO: Integer;
+    FMeasuredWhiteBalanceMode: Integer;
+    FLockAfterFirstFrame: Boolean;
+    FExposureLocked: Boolean;
     FOnAuthorizationStatus: TAuthorizationStatusEvent;
     FOnDetectedFaces: TDetectedFacesEvent;
     FOnFrameAvailable: TFrameAvailableEvent;
@@ -242,6 +251,32 @@ type
     /// </summary>
     property RequestedWhiteBalanceMode: Integer read FRequestedWhiteBalanceMode
       write SetRequestedWhiteBalanceMode;
+    /// <summary>
+    ///   TimeLapse: freeze the exposure on what the camera chose for the first
+    ///   completed frame, and reuse it for every frame after.
+    ///
+    ///   This is THE time-lapse setting. Left to itself, automatic exposure
+    ///   re-decides on every frame: the finished video flickers, and no amount
+    ///   of editing takes that out. Locking after the first frame keeps the
+    ///   convenience of automatic metering for the shot that sets the scene,
+    ///   then holds it steady for the hours that follow.
+    ///
+    ///   Nothing happens until a frame completes, so a lock asked for before
+    ///   the camera has seen anything simply waits.
+    /// </summary>
+    property LockAfterFirstFrame: Boolean read FLockAfterFirstFrame
+      write FLockAfterFirstFrame;
+    /// <summary>TimeLapse: True once the values have been captured and held.</summary>
+    property ExposureLocked: Boolean read FExposureLocked;
+    /// <summary>TimeLapse: exposure the camera actually used, in nanoseconds.</summary>
+    property MeasuredExposureTime: Int64 read FMeasuredExposureTime;
+    /// <summary>TimeLapse: sensitivity the camera actually used.</summary>
+    property MeasuredISO: Integer read FMeasuredISO;
+    /// <summary>TimeLapse: records what the camera used. Called by the platform.</summary>
+    procedure SetMeasured(const AExposureTime: Int64; const AISO: Integer;
+      const AWhiteBalanceMode: Integer);
+    /// <summary>Releases the lock, so metering resumes.</summary>
+    procedure UnlockExposure;
     /// <summary>TimeLapse: largest zoom the sensor accepts; 1 means none.</summary>
     function MaxZoom: Single;
     /// <summary>TimeLapse: white balance modes the sensor really offers.</summary>
@@ -466,6 +501,12 @@ end;
 function TCustomPlatformCamera.GetMaxZoom: Single;
 begin
   Result := 1;
+end;
+
+procedure TCustomPlatformCamera.SetMeasuredExposure(const AExposureTime: Int64;
+  const AISO: Integer; const AWhiteBalanceMode: Integer);
+begin
+  FCamera.SetMeasured(AExposureTime, AISO, AWhiteBalanceMode);
 end;
 
 function TCustomPlatformCamera.GetAvailableWhiteBalanceModes: TArray<Integer>;
@@ -867,6 +908,39 @@ end;
 function TCamera.MaxExposureTime: Int64;
 begin
   Result := FPlatformCamera.GetMaxExposureTime;
+end;
+
+// TimeLapse: called from the camera thread on every completed frame. It must
+// stay cheap and must not raise - hence no logging, no allocation.
+procedure TCamera.SetMeasured(const AExposureTime: Int64; const AISO: Integer;
+  const AWhiteBalanceMode: Integer);
+begin
+  // A frame that reports nothing usable teaches nothing: keep waiting rather
+  // than lock onto zeros, which would produce black images for hours.
+  if (AExposureTime <= 0) or (AISO <= 0) then
+    Exit;
+  FMeasuredExposureTime := AExposureTime;
+  FMeasuredISO := AISO;
+  FMeasuredWhiteBalanceMode := AWhiteBalanceMode;
+  if FLockAfterFirstFrame and not FExposureLocked then
+  begin
+    FExposureLocked := True;
+    // From here the measured values are used as if they had been requested, so
+    // every later frame is exposed exactly like the first.
+    FRequestedExposureTime := AExposureTime;
+    FRequestedISO := AISO;
+    if AWhiteBalanceMode > 0 then
+      FRequestedWhiteBalanceMode := AWhiteBalanceMode;
+    FPlatformCamera.CameraSettingChanged;
+  end;
+end;
+
+procedure TCamera.UnlockExposure;
+begin
+  FExposureLocked := False;
+  FRequestedExposureTime := 0;
+  FRequestedISO := 0;
+  FPlatformCamera.CameraSettingChanged;
 end;
 
 function TCamera.MaxZoom: Single;

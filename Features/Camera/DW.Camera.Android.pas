@@ -770,10 +770,58 @@ begin
 end;
 }
 
+// TimeLapse: reads back what the camera really used for this frame. The values
+// come from the RESULT, not from what was asked: with automatic metering, the
+// two differ, and only the result says what was actually applied.
+function ReadResultLong(const AResult: JCaptureResult;
+  const AKey: JCaptureResult_Key): Int64;
+var
+  LObject: JObject;
+begin
+  Result := 0;
+  if AResult = nil then
+    Exit;
+  try
+    LObject := AResult.get(AKey);
+    if LObject <> nil then
+      Result := TJLong.Wrap((LObject as ILocalObject).GetObjectID).longValue;
+  except
+    // A frame that will not answer is not a reason to interrupt a capture.
+    on E: Exception do
+      Result := 0;
+  end;
+end;
+
+function ReadResultInt(const AResult: JCaptureResult;
+  const AKey: JCaptureResult_Key): Integer;
+var
+  LObject: JObject;
+begin
+  Result := 0;
+  if AResult = nil then
+    Exit;
+  try
+    LObject := AResult.get(AKey);
+    if LObject <> nil then
+      Result := TJInteger.Wrap((LObject as ILocalObject).GetObjectID).intValue;
+  except
+    on E: Exception do
+      Result := 0;
+  end;
+end;
+
 procedure TCameraCaptureSession.CaptureCompleted(session: JCameraCaptureSession; request: JCaptureRequest; result: JTotalCaptureResult);
 var
   LHelper: JDWCaptureResultHelper;
 begin
+  // TimeLapse: every completed frame reports the exposure it was taken with.
+  // That is what lets an application freeze the first frame's settings and hold
+  // them for the rest of a time-lapse - see TCamera.LockAfterFirstFrame.
+  FPlatformCamera.SetMeasuredExposure(
+    ReadResultLong(result, TJCaptureResult.JavaClass.SENSOR_EXPOSURE_TIME),
+    ReadResultInt(result, TJCaptureResult.JavaClass.SENSOR_SENSITIVITY),
+    ReadResultInt(result, TJCaptureResult.JavaClass.CONTROL_AWB_MODE));
+
   LHelper := TJDWCaptureResultHelper.JavaClass.init;
   LHelper.setCaptureResult(result);
   // Check what kind of CaptureRequest from request (eg still or continuous)
