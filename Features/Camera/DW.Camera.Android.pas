@@ -1,4 +1,4 @@
-unit DW.Camera.Android;
+﻿unit DW.Camera.Android;
 
 {*******************************************************}
 {                                                       }
@@ -1174,6 +1174,10 @@ begin
     Exit;
   end;
   TOSLog.d('> Obtained ID and map');
+  // TimeLapse: record which camera is actually being opened. Without this, the
+  // application had no way of knowing which lens it was looking through when it
+  // had not asked for one by name - and it showed the wrong one as selected.
+  Camera.RequestedLensId := JStringToString(LCameraID);
   LCharacteristics := FCameraManager.getCameraCharacteristics(LCameraID);
   LHelper.setCameraCharacteristics(LCharacteristics);
   FSensorExposureTimeRange.Lower := LHelper.getSensorExposureTimeLower;
