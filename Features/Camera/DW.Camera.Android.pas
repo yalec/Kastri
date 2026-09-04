@@ -23,7 +23,7 @@ uses
   // FMX
   FMX.Controls, FMX.Graphics, FMX.Types,
   // DW
-  DW.Camera, DW.Androidapi.JNI.Os, DW.Androidapi.JNI.Hardware.Camera2, DW.Androidapi.JNI.DWCameraHelpers, DW.Androidapi.JNI.View, DW.CameraPreview;
+  DW.Camera, DW.Androidapi.JNI.ReflectArray, DW.Androidapi.JNI.Os, DW.Androidapi.JNI.Hardware.Camera2, DW.Androidapi.JNI.DWCameraHelpers, DW.Androidapi.JNI.View, DW.CameraPreview;
 
 type
   TPlatformCamera = class;
@@ -166,6 +166,7 @@ type
     function GetMinISO: Integer; override;
     function GetMaxISO: Integer; override;
     function GetMaxZoom: Single; override;
+    function GetLenses: TCameraLenses; override;
     function GetAvailableWhiteBalanceModes: TArray<Integer>; override;
     // TimeLapse: the sensor rectangle to read for the requested zoom, or nil
     // when there is nothing to crop.
@@ -1126,6 +1127,17 @@ begin
 	  LCharacteristics := FCameraManager.getCameraCharacteristics(LItem);
     LHelper.setCameraCharacteristics(LCharacteristics);
     LLensFacing := LHelper.getLensFacing;
+    // TimeLapse: an explicitly chosen camera wins over the position. Without
+    // this, only the first camera on a side was ever reachable - and a phone
+    // has three of them on the back, with different optics.
+    if (Camera.RequestedLensId <> '') and
+       (JStringToString(LItem) = Camera.RequestedLensId) then
+    begin
+      LCameraID := LItem;
+      FCameraOrientation := LHelper.getSensorOrientation;
+      LMap := LHelper.getMap;
+      Break;
+    end;
     case CameraPosition of
       TDevicePosition.Back:
       begin
@@ -1447,6 +1459,78 @@ begin
       FActiveWidth := 0;
       FActiveHeight := 0;
       FAvailableAWBModes := nil;
+    end;
+  end;
+end;
+
+// TimeLapse: enumerates the physical cameras, with the focal length each one
+// reports. Needs neither an open camera nor a permission.
+//
+// The focal length arrives as a float[] behind a bare Object, which the JNI
+// bridge cannot wrap safely - see DW.Androidapi.JNI.ReflectArray for why, and
+// what is used instead.
+//
+// The 35 mm equivalent is computed here rather than left to the caller: 4.3 mm
+// on a phone sensor means nothing on its own, while 13 mm equivalent says
+// "ultra wide" to anyone who has held a camera.
+function TPlatformCamera.GetLenses: TCameraLenses;
+var
+  LCameraIDList: TJavaObjectArray<JString>;
+  LItem: JString;
+  LCharacteristics: JCameraCharacteristics;
+  LHelper: JDWCameraCharacteristicsHelper;
+  LObject: JObject;
+  LFocals: TArray<Single>;
+  LSize: JSizeF;
+  LLens: TCameraLens;
+  LDiagonal: Single;
+  I: Integer;
+begin
+  Result := nil;
+  if FCameraManager = nil then
+    Exit;
+  try
+    LCameraIDList := FCameraManager.getCameraIdList;
+    if LCameraIDList = nil then
+      Exit;
+    LHelper := TJDWCameraCharacteristicsHelper.JavaClass.init;
+    for I := 0 to LCameraIDList.Length - 1 do
+    begin
+      LItem := LCameraIDList.Items[I];
+      LCharacteristics := FCameraManager.getCameraCharacteristics(LItem);
+      LHelper.setCameraCharacteristics(LCharacteristics);
+
+      LLens := Default(TCameraLens);
+      LLens.Id := JStringToString(LItem);
+      LLens.IsBack := LHelper.getLensFacing =
+        TJCameraMetadata.JavaClass.LENS_FACING_BACK;
+
+      LObject := LCharacteristics.get(
+        TJCameraCharacteristics.JavaClass.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
+      LFocals := ReadFloatArray(LObject);
+      // A zoom lens reports several; the shortest is what frames the widest
+      // view, and that is what distinguishes one camera from the next.
+      if Length(LFocals) > 0 then
+        LLens.FocalLength := LFocals[0];
+
+      LObject := LCharacteristics.get(
+        TJCameraCharacteristics.JavaClass.SENSOR_INFO_PHYSICAL_SIZE);
+      if (LObject <> nil) and (LLens.FocalLength > 0) then
+      begin
+        LSize := TJSizeF.Wrap((LObject as ILocalObject).GetObjectID);
+        LDiagonal := Sqrt(Sqr(LSize.getWidth) + Sqr(LSize.getHeight));
+        // 43.27 mm is the diagonal of a 35 mm frame.
+        if LDiagonal > 0 then
+          LLens.EquivalentFocalLength := LLens.FocalLength * 43.27 / LDiagonal;
+      end;
+
+      Result := Result + [LLens];
+    end;
+  except
+    on E: Exception do
+    begin
+      TOSLog.w('Could not enumerate cameras: %s', [E.Message]);
+      Result := nil;
     end;
   end;
 end;

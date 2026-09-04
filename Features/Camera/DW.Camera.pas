@@ -24,6 +24,31 @@ uses
 type
   TMetadataOption = (GPS, Orientation);
 
+  /// <summary>
+  ///   TimeLapse: one physical camera the device exposes. A phone reports
+  ///   several on the same side - ultra wide, wide, telephoto - and they are
+  ///   different OPTICS, not crops of one another. Choosing between them is the
+  ///   one framing decision digital zoom cannot replace, since zoom throws
+  ///   pixels away and a wider lens does not.
+  /// </summary>
+  TCameraLens = record
+    /// <summary>The id camera2 opens this camera with.</summary>
+    Id: string;
+    /// <summary>Physical focal length in millimetres, as the sensor reports.</summary>
+    FocalLength: Single;
+    /// <summary>
+    ///   Focal length in 35 mm terms, computed from the sensor's physical size.
+    ///   That is the number photographers read: 13 mm says "ultra wide" to
+    ///   anyone, 4.3 mm says nothing.
+    ///   Zero when the sensor size could not be read.
+    /// </summary>
+    EquivalentFocalLength: Single;
+    /// <summary>True for a camera on the back of the device.</summary>
+    IsBack: Boolean;
+  end;
+
+  TCameraLenses = TArray<TCameraLens>;
+
   TMetadataOptions = set of TMetadataOption;
 
   TFaceDetectMode = (None, Simple, Full);
@@ -100,6 +125,8 @@ type
     // TimeLapse: the largest digital zoom the sensor accepts. 1 means no zoom is
     // available, which is different from "not asked yet".
     function GetMaxZoom: Single; virtual;
+    // TimeLapse: the physical cameras this device offers.
+    function GetLenses: TCameraLenses; virtual;
     // TimeLapse: what the camera actually used for the last frame it completed.
     // Zero means nothing has been measured yet.
     procedure SetMeasuredExposure(const AExposureTime: Int64;
@@ -155,6 +182,7 @@ type
     FRequestedISO: Integer;
     FRequestedZoom: Single;
     FRequestedWhiteBalanceMode: Integer;
+    FRequestedLensId: string;
     FMeasuredExposureTime: Int64;
     FMeasuredISO: Integer;
     FMeasuredWhiteBalanceMode: Integer;
@@ -277,6 +305,20 @@ type
       const AWhiteBalanceMode: Integer);
     /// <summary>Releases the lock, so metering resumes.</summary>
     procedure UnlockExposure;
+    /// <summary>
+    ///   TimeLapse: the physical cameras available. Read without opening
+    ///   anything, so a settings screen can offer them before capture starts.
+    /// </summary>
+    function Lenses: TCameraLenses;
+    /// <summary>
+    ///   TimeLapse: which physical camera to open, by id. Empty - the default -
+    ///   keeps the first camera matching CameraPosition, which is what this
+    ///   library did before.
+    ///   Read when the camera opens, so set it BEFORE setting IsActive; the
+    ///   caller reopens if it changes while running.
+    /// </summary>
+    property RequestedLensId: string read FRequestedLensId
+      write FRequestedLensId;
     /// <summary>TimeLapse: largest zoom the sensor accepts; 1 means none.</summary>
     function MaxZoom: Single;
     /// <summary>TimeLapse: white balance modes the sensor really offers.</summary>
@@ -501,6 +543,11 @@ end;
 function TCustomPlatformCamera.GetMaxZoom: Single;
 begin
   Result := 1;
+end;
+
+function TCustomPlatformCamera.GetLenses: TCameraLenses;
+begin
+  Result := nil;
 end;
 
 procedure TCustomPlatformCamera.SetMeasuredExposure(const AExposureTime: Int64;
@@ -941,6 +988,11 @@ begin
   FRequestedExposureTime := 0;
   FRequestedISO := 0;
   FPlatformCamera.CameraSettingChanged;
+end;
+
+function TCamera.Lenses: TCameraLenses;
+begin
+  Result := FPlatformCamera.GetLenses;
 end;
 
 function TCamera.MaxZoom: Single;
